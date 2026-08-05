@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(../private/**)",
+      "Read(//srv/vault/private/**)",
+      "Write(../private/**)",
+      "Write(//srv/vault/private/**)"
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+# Catalogo intent — rotte del router (master §5). Si predispone il COME rispondere,
+# mai il COSA: ogni intent punta a un tool deterministico che legge i dati vivi.
+# Si parte con poche voci e cresce per sedimentazione: quando una domanda finisce
+# spesso al Livello 2 ed è sempre uguale, si promuove a slash-command (L0).
+
+version: 1
+
+# --- Livello 0: comandi secchi → agenda diretto (zero LLM, ms) ---------------
+l0:
+  - command: /agenda
+    tool: "agenda --oggi"
+    desc: "Task in scadenza oggi (due o scheduled <= oggi)."
+  - command: /settimana
+    tool: "agenda --settimana"
+    desc: "Task con scadenza nei prossimi 7 giorni."
+  - command: /scadenze
+    tool: "agenda --scadute --range=14d"
+    desc: "Scaduti + prossimi 14 giorni."
+  - command: /cliente
+    tool: "agenda --tag=cliente/{arg}"
+    desc: "Task di un cliente (arg = nome, es. acme)."
+
+# --- Livello 1: linguaggio naturale → tool-choice LLM ------------------------
+# L'LLM sceglie UNO di questi tool ed estrae i parametri; il bot esegue e sintetizza.
+l1_tools:
+  - name: agenda
+    desc: "Query sui task per data/tag/priorità."
+  - name: search_vault      # Khoj, da Beta B
+    desc: "Ricerca semantica nelle note pubbliche."
+  - name: read_note         # allowlist di path pubblici
+    desc: "Legge una nota indicata per path."
+
+# --- Livello 2: /cc <richiesta> o fallback → claude -p read-only -------------
+l2:
+  trigger: "/cc"
+  desc: "Query ricche multi-passo. Read-only, budget e turni limitati (master §5/§8)."
+
+# --- Regole di canale (master §5) --------------------------------------------
+channels:
+  voice: [l0, l1]           # risposte brevi, pronunciabili
+  telegram: [l0, l1, l2]    # tollera latenza e risposte lunghe
