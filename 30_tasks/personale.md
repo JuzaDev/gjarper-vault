@@ -1,1 +1,6 @@
 - [ ] Task di prova del timer 📅 2026-08-06 ⏫ #test
+- [ ] gjarper: repo restic su /mnt/disco per /srv/documenti e /srv/immich ⏫ #rnd
+- [ ] gjarper: copia offsite dei backup (storage a oggetti, ~30 GB) ⏫ #rnd
+- [ ] gjarper: prenotazione DHCP di 192.168.8.19 nel router 🔼 #rnd
+- [ ] gjarper: APP_TOKEN e binding su 127.0.0.1 per transcribe 🔼 #rnd
+- [ ] gjarper: UPS (~40-50 euro) prima del bulk import foto 🔽 #rnd

@@ -2,8 +2,9 @@
 tipo: nota
 zona: pubblica
 tag: [rnd]
-aggiornata: 2026-09-30
-stato: compilata — resta lo SMART dei 2 HDD e l'ispezione del bay 2.5"
+aggiornata: 2026-10-01
+stato: compilata — bay 2.5" occupato dal WD500 (SMART ottimo). Resta lo SMART
+  dell'Hitachi 750, che non verrà collegato: la macchina è piena
 ---
 
 # gjarper — inventario hardware
@@ -58,10 +59,12 @@ Minisforum/AMD. **[DA VERIFICARE]** = ancora aperto.
 | Device | Tipo | Capacità | Interfaccia | Stato |
 |---|---|---|---|---|
 | `nvme0n1` | Lexar NM790 | **1 TB** (953,9 G) | PCIe **Gen4 x4** | installato, disco di sistema |
-| 2.5" bay | — | — | SATA 3.0 (max 2 TB) | **LIBERO** |
+| `sda` | WDC WD5000LPVX-22V0TT0 (WD Blue Mobile) | **500 GB** (465,8 G) | SATA 3.0, 6 Gb/s | installato il 2026-10-01 nel bay 2.5" |
 | M.2 2230 | Wi-Fi + BT | — | — | occupato dalla scheda wireless |
 
-- **Nessun secondo slot M.2**: l'unico alloggiamento libero è **2.5" SATA**.
+- **Nessun secondo slot M.2**: l'unico alloggiamento libero era il **2.5" SATA**,
+  occupato dal 2026-10-01. La macchina è ora piena: qualsiasi altro disco passa
+  da USB.
 - **Salute NVMe: ottima** — `SMART overall-health: PASSED`, **Percentage Used 0%**,
   159 GB scritti, 31 ore accese, 31 °C.
 - **Partizionamento** — la trappola LVM di Ubuntu **non** si è verificata:
@@ -76,9 +79,42 @@ Minisforum/AMD. **[DA VERIFICARE]** = ancora aperto.
   - Quindi `/` ha **935 G, 67 G usati, 821 G liberi (8%)**
   - Rovescio: **VFree 0 = nessuno spazio per snapshot LVM.** Irrilevante con
     `restic`, ma da sapere se un giorno servissero.
-- **Dischi a magazzino:** 1 × HDD 500 GB, 1 × HDD 750 GB, 2.5" **da 7 mm**
-  (compatibili col bay) — **[DA VERIFICARE]** SMART, non ancora collegati
-- **[DA VERIFICARE]** presenza di **cavo/staffa SATA** nel coperchio inferiore
+- **Cavo/staffa SATA: presenti** nel coperchio inferiore (verificato il
+  2026-10-01). ⚠️ Il bay sta *nel coperchio* e un cavetto lo collega alla scheda:
+  aprire piano, non sollevare il coperchio come un libro.
+- **Hitachi 750 GB**: resta a magazzino, SMART mai verificato. Non serve più —
+  il bay è uno solo ed è occupato.
+
+### Disco 2.5" — WD5000LPVX (installato il 2026-10-01)
+
+| | |
+|---|---|
+| Modello | WDC WD5000LPVX-22V0TT0 "WD Blue Mobile", 5400 rpm, 7 mm |
+| Seriale | WD-WX11A4432776 |
+| Settori | 512 B logici / 4096 B fisici |
+| Partizioni | `sda1` 16 M Microsoft reserved (vuota) · `sda2` 465,7 G **NTFS**, label `WD500` |
+| Occupazione | 136 G usati, **331 G liberi** |
+| Mount | `/mnt/disco`, da `/etc/fstab` — vedi `gjarper-servizi.md` |
+
+**SMART al 2026-10-01 — disco sano.** `Reallocated_Sector_Ct`,
+`Current_Pending_Sector`, `Offline_Uncorrectable`, `Reallocated_Event_Count`,
+`Raw_Read_Error_Rate`, `Seek_Error_Rate`, `Spin_Retry_Count` e
+`UDMA_CRC_Error_Count` **tutti a 0**. Self-test esteso:
+`Completed without error` su tutta la superficie.
+
+- **Power_On_Hours: 1522** (~63 giorni di rotazione reale). Su un HDD meccanico
+  conta questo, non l'età anagrafica: è un disco poco usato.
+- `Power_Cycle_Count` 1912 e `Load_Cycle_Count` 22138 — profilo da portatile,
+  comunque al 4% della vita prevista per i cicli di parcheggio.
+- ⚠️ **`G-Sense_Error_Rate`: RAW 104, VALUE sceso a `001`.** Sono urti rilevati
+  dall'accelerometro, e il `001` è solo il contatore normalizzato a fondo scala:
+  `THRESH` è `000`, quindi quell'attributo **non può** per costruzione segnalare
+  un guasto. La prova che gli urti non hanno fatto danni è che i settori
+  riallocati restano 0. Da non confondere con un allarme.
+- `UDMA_CRC_Error_Count: 0` certifica anche il **cavo SATA** appena collegato.
+
+Da ripetere ogni tanto (è in sola lettura, non disturba):
+`sudo smartctl -A /dev/sda` e `sudo smartctl -t long /dev/sda`.
 
 ## Sistema
 
@@ -106,7 +142,12 @@ Minisforum/AMD. **[DA VERIFICARE]** = ancora aperto.
 
 - **Tailscale 1.102.2 installato ma `tailscaled` NON in esecuzione**
   → blocca l'intero piano di accesso, vedi § Prossimi passi
-- **[DA VERIFICARE]** IP LAN statico, IP tailnet (dopo il riavvio del daemon)
+- **IP LAN: `192.168.8.19/24` su `eno1`, ma `dynamic`** — assegnato dal DHCP del
+  router, **non statico** (verificato il 2026-10-01 con `ip -4 addr show`).
+  Finora non è cambiato, ma il giorno in cui cambierà si romperanno insieme tutti
+  i nomi `.gjarper` nei file hosts di tutti i PC. Si chiude con una
+  **prenotazione DHCP sul MAC di gjarper** nel router.
+- IP tailnet `100.76.226.98` · MagicDNS `gjarper.tail6cb7a3.ts.net`
 
 ---
 
@@ -155,14 +196,30 @@ Minisforum/AMD. **[DA VERIFICARE]** = ancora aperto.
    momento in cui i dati diventano insostituibili.
 8. **Tailscale riattivato** il 2026-09-28: `tailscaled` abilitato, nodo
    riautenticato, IP tailnet ottenuto.
+9. **Disco 2.5" installato** il 2026-10-01 — ma **non** uno dei due di recupero
+   vuoti: il WD500, che conteneva già 136 GB di backup di quattro macchine
+   (Acer di Chiara, Hitachi 750, Victus, lo stesso WD500) più `Film` e `Foto`.
+   Scelta conseguente: **NTFS tenuto com'è**, niente formattazione. I 331 GB
+   liberi bastano per il repo `restic` di `/srv`. Se un giorno servisse ext4, la
+   strada c'è — i 136 GB entrano negli 821 GB liberi dell'NVMe, quindi si
+   travasa, si riformatta e si rimette.
 
 ## Rischi noti
 
 - **Single point of failure:** tutto su un solo NVMe, nessuna redundancy. Il
   disco è nuovo e sano (0% di usura), ma il backup non è opzionale.
+- ⚠️ **Dal 2026-10-01 il disco di backup è nella stessa scatola dei dati.**
+  Stesso alimentatore, stesso (non) UPS, stesso furto, stesso fulmine. Copre il
+  guasto dell'NVMe e la cancellazione per sbaglio — **non** sostituisce una copia
+  offsite. Vale anche al contrario: quei 136 GB di backup di altre macchine
+  adesso non hanno più una copia altrove.
 - **`transcribe-web-1` è in ascolto su `0.0.0.0:8000`**, quindi raggiungibile da
   tutta la LAN, a differenza degli altri container che stanno su loopback dietro
-  Caddy. Da uniformare a `127.0.0.1:8000` se non è intenzionale.
+  Caddy. ⚠️ **Confermato il 2026-10-01 che non ha nemmeno l'autenticazione**:
+  `/api/health` risponde `"auth": false`, cioè `APP_TOKEN` non è impostato.
+  Chiunque sia sulla LAN legge e scarica tutte le trascrizioni. Da chiudere su
+  due fronti: `APP_TOKEN` nel `.env` **e** binding su `127.0.0.1:8000` dietro
+  Caddy, che il blocco `trascrizione.gjarper` già prevede.
 - **Nessun UPS:** PostgreSQL (Immich) + blackout è il modo classico di scoprire
   che i backup non funzionavano. ~40-50 €.
 - **HDD di recupero:** età reale ignota. Ok come copia ridondante, mai come unica.
@@ -179,9 +236,12 @@ Riferimenti rapidi: tailnet `100.76.226.98`, MagicDNS `gjarper.tail6cb7a3.ts.net
 
 ## Prossimi passi / verifiche aperte
 
-1. **Riattivare Tailscale** — precondizione di tutto il resto:
-   `sudo systemctl enable --now tailscaled && sudo tailscale up`
+1. **Prenotazione DHCP** di `192.168.8.19` sul MAC di gjarper nel router — vedi
+   § Rete. È il prerequisito perché i nomi `.gjarper` non scadano da soli.
 2. **Confermare VAAPI:** `vainfo --display drm --device /dev/dri/renderD128`
    (cercare `VAProfileH264*` e `VAProfileHEVC*` fra encode e decode)
-3. **SMART dei 2 HDD**, da collegare via USB uno alla volta
-4. **Ispezione fisica:** cavo/staffa SATA nel coperchio inferiore?
+3. **`unattended-upgrades`** e i pacchetti di sistema arretrati (69 al 2026-10-01,
+   erano 82 al 2026-09-28).
+
+Chiusi il 2026-10-01: Tailscale riattivato (decisione #8), SMART del WD500,
+ispezione del bay e del cavo SATA.

@@ -2,10 +2,10 @@
 tipo: nota
 zona: pubblica
 tag: [rnd]
-aggiornata: 2026-09-30
-stato: FileBrowser e Immich operativi, documenti ora scrivibili anche
-  dall'interfaccia; restano backup off-machine, secondo utente iPhone e bulk
-  fotografico
+aggiornata: 2026-10-01
+stato: FileBrowser, Immich e transcribe operativi; disco WD500 montato su
+  /mnt/disco. Restano restic, prenotazione DHCP, autenticazione di transcribe,
+  secondo utente iPhone e bulk fotografico
 ---
 
 # gjarper — servizi self-hosted
@@ -39,6 +39,8 @@ server Tailscale (di solito: isolamento client sull'access point, o UDP bloccato
 | Servizio | URL | Dove funziona |
 |---|---|---|
 | Documenti | `http://documenti.gjarper` | PC con la voce in `/etc/hosts` |
+| Trascrizioni | `http://trascrizione.gjarper` | PC con la voce in `/etc/hosts` |
+| Trascrizioni | `http://<ip-lan>:8000` | LAN - bypassa Caddy, vedi § Trascrizioni |
 | Documenti | `http://gjarper.tail6cb7a3.ts.net` | qualsiasi device Tailscale, telefoni compresi |
 | Foto | `http://<ip-lan>:2283` | LAN |
 | Foto | `http://gjarper.tail6cb7a3.ts.net:2283` | qualsiasi device Tailscale |
@@ -50,17 +52,89 @@ telefoni si usa il nome MagicDNS, non l'IP.
 
 ## Reverse proxy — Caddy
 
-- Progetto: `~/infra`, container `infra-caddy-1`, immagine `caddy:2`
+- **Compose: `~/infra/caddy/docker-compose.yml`** (corretto il 2026-10-01: la
+  nota diceva `~/infra`, dove non c'è nessun file che Compose riconosca - un
+  `docker compose up -d` da lì risponde `no configuration file provided`).
+  Il container si chiama `infra-caddy-1` e non `caddy-caddy-1` perché nel file
+  c'è un `name: infra` esplicito.
+- Container `infra-caddy-1`, immagine `caddy:2`
 - **`network_mode: host`** → ascolta direttamente su `*:80` e `*:443` e raggiunge
   gli altri container su `127.0.0.1:<porta>`
 - Config: `~/infra/caddy/Caddyfile` → montato su `/etc/caddy/Caddyfile`
 - Convenzione: un blocco per servizio, prefisso `http://` = niente auto-HTTPS
-- Ricarica senza riavvio:
-  `docker exec infra-caddy-1 caddy reload --config /etc/caddy/Caddyfile`
 - Porte occupate: 3089 (anime-monitor), 5199/8099 (yt-analizer), 8000
   (transcribe-web), 8081 (filebrowser), 2283 (immich)
-- Residui da ripulire: blocchi `sync.gjarper` (8384) e `vault.gjarper` (3300),
-  che puntano a servizi non attivi
+- Blocchi verso servizi **fermi, non inesistenti**: `sync.gjarper` → 8384
+  (`~/syncthing/docker-compose.yml`) e `vault.gjarper` → 3300
+  (`~/infra/silverbullet/docker-compose.yml`). ⚠️ Rettifica del 2026-10-01: non
+  sono residui da cancellare al volo, sono due servizi installati e spenti.
+  Syncthing in particolare è la risposta già individuata al problema della
+  sincronizzazione continua dei documenti. Decidere prima se riaccenderli.
+  (Entrambi hanno `restart: unless-stopped`: fermati a mano, **non** ripartono
+  da soli al boot.)
+- `vault.gjarper` è l'unico blocco senza prefisso `http://`, ma ha `tls internal`
+  → certificato dalla CA interna di Caddy, non un certificato pubblico. Fa
+  comparire nel log `server is listening only on the HTTPS port...`: è normale.
+
+### Modificare il Caddyfile — la regola che è costata un'interruzione
+
+```bash
+# 1. backup
+cp ~/infra/caddy/Caddyfile ~/infra/caddy/Caddyfile.bak
+# 2. modifica
+nano ~/infra/caddy/Caddyfile
+# 3. VALIDA (funziona anche se il container è rotto: usa un container usa-e-getta)
+docker run --rm -v ~/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro caddy:2 \
+  caddy validate --config /etc/caddy/Caddyfile
+# 4. solo se dice "Valid configuration":
+docker exec infra-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+```
+
+**Guardare sempre l'esito del passo 3 o 4.** Un `reload` fallito non spegne
+niente: il processo continua a servire la configurazione **vecchia, tenuta in
+memoria**, e il file rotto su disco ti aspetta al primo riavvio - settimane
+dopo, quando non ricordi più cosa avevi cambiato.
+
+Formattazione (facoltativa, toglie il warning `input is not formatted`):
+
+```bash
+docker run --rm -v ~/infra/caddy:/work -w /work caddy:2 caddy fmt --overwrite Caddyfile
+```
+
+### Incidente del 2026-10-01 — `ambiguous site definition`
+
+**Sintomo:** dopo lo spegnimento per montare il disco, `infra-caddy-1` in
+`Restarting (1)` a ciclo continuo e **nessun** nome `.gjarper` raggiungibile dai
+PC, mentre tutti gli altri container erano `Up`.
+
+**Causa:** nel Caddyfile il blocco `http://foto.gjarper` compariva **due volte**,
+identico (righe 35-37 e 39-41). Caddy non sceglie fra due definizioni dello
+stesso sito: rifiuta l'intera configurazione ed esce con codice 1.
+
+```
+Error: adapting config using caddyfile: ambiguous site definition: http://foto.gjarper
+```
+
+**La lezione, che è il vero contenuto di questo paragrafo:** il file era rotto
+**dal 28/09**, probabilmente dal setup di Immich. Caddy girava da 7 settimane
+con la configurazione valida caricata in memoria, e nessuno se n'era accorto.
+Il riavvio non ha causato il guasto - l'ha solo **rivelato**. Da cui la regola
+del paragrafo precedente.
+
+**Diagnosi in ordine**, per la prossima volta che "non si raggiunge niente":
+
+1. `docker ps` - se gli altri container sono `Up` e solo Caddy è `Restarting`,
+   il problema è il proxy, non la rete né la macchina.
+2. `docker logs --tail 50 infra-caddy-1` - Caddy scrive in chiaro la riga che
+   non gli torna.
+3. Controprova a costo zero: **transcribe su `http://<ip-lan>:8000` bypassa
+   Caddy**. Se quello risponde, i servizi stanno bene e manca solo il proxy.
+4. Solo se anche SSH e `ping` falliscono, allora è rete: IP cambiato (è DHCP,
+   vedi `gjarper-hardware.md`), cavo ethernet, o una **VPN attiva sul PC** che
+   dirotta anche gli indirizzi di LAN.
+
+**Riparazione:** rimosso il blocco duplicato, `caddy validate` → `Valid
+configuration`, `docker restart infra-caddy-1` → `Up`.
 
 ## Documenti — FileBrowser Quantum
 
@@ -243,6 +317,56 @@ Nel blocco `immich-server` di `docker-compose.yml`:
 `gfx1035` (la 680M) e l'immagine pesa svariati GB. Con 16 thread CLIP e
 riconoscimento volti vanno bene. L'accelerazione che conta — quella video —
 è già coperta da VAAPI.
+
+## Archivio — disco WD500 su `/mnt/disco`
+
+Dal 2026-10-01 nel bay 2.5" c'è un **WD Blue Mobile 500 GB** (dettagli e SMART in
+`gjarper-hardware.md`). **Non era vuoto**: contiene 136 GB di backup di quattro
+macchine - `backup_acer_chiara_30092026`, `backup_hitachi750`,
+`BACKUP_victus_29092026`, `backup_WD500_29092026` - più `Film` e `Foto`.
+Restano **331 GB liberi**.
+
+Di conseguenza **NTFS è stato tenuto**, niente formattazione.
+
+```
+# /etc/fstab  (backup in /etc/fstab.bak)
+UUID=1402C95602C93D8C  /mnt/disco  ntfs-3g  defaults,nofail,uid=1000,gid=1001,umask=0002,windows_names,big_writes,x-systemd.device-timeout=10  0  0
+```
+
+Verifica: `ls -ld /mnt/disco` deve dare `drwxrwxr-x 1 paolo vault`.
+
+Perché ogni opzione, perché nessuna è decorativa:
+
+- **`ntfs-3g` e non `ntfs3`** - il driver effettivamente in uso qui è ntfs-3g via
+  FUSE. Si legge da `mount | grep sda2`: `type fuseblk` = ntfs-3g,
+  `type ntfs3` = driver in kernel. Mettere il tipo sbagliato fa fallire il mount.
+- **`uid=1000,gid=1001`** - NTFS **non ha permessi Unix**: il kernel se li
+  inventa per tutto il volume. Senza istruzioni li inventa a favore di root
+  (`user_id=0,group_id=0` nell'output di `findmnt`) e non ci scrivi senza
+  `sudo`. Così invece il volume è di `paolo` e del gruppo **`vault` (GID 1001)**,
+  lo stesso che FileBrowser ha già in `group_add`: esporre `Film` o `Foto`
+  nell'interfaccia non richiederà di toccare i permessi.
+- **`umask=0002`** - cartelle 775, file 664, invece del 777 di default.
+- **`nofail`** - ⚠️ il pezzo che conta davvero. Senza, il giorno in cui questo
+  disco muore **il server non completa il boot** e perdi anche Immich e i
+  documenti per colpa di un disco secondario.
+- **`0 0` finale** - niente `fsck` all'avvio: su NTFS non esiste, e un valore
+  diverso da zero bloccherebbe il boot.
+
+### Trappole incontrate
+
+- **Primo mount sempre in sola lettura** (`mount -o ro /dev/sda2 /mnt/disco`).
+  Se il disco è stato staccato da Windows con Fast Startup o ibernazione attivi,
+  l'NTFS resta marcato *dirty*: montarlo in scrittura in quello stato è il modo
+  classico di danneggiare la tabella dei file. Qui era pulito. Se non lo fosse,
+  non si ripara da Linux: si rimette su un PC Windows, `chkdsk /f` o espulsione
+  corretta.
+- **La partizione da montare è `sda2`, non `sda1`.** `sda1` è la Microsoft
+  Reserved Partition (16 MB, vuota per definizione): non si monta e non si tocca.
+  È il layout normale di un disco GPT formattato da Windows.
+- Dopo aver modificato `/etc/fstab`, `mount -a` avverte che systemd usa ancora la
+  versione vecchia: `sudo systemctl daemon-reload`. Non è obbligatorio (al boot
+  si riallinea da solo) ma toglie l'avviso.
 
 ## Procedure
 
@@ -448,6 +572,56 @@ vorrà automatizzare qualcosa su quei file — per esempio dopo l'import dal Vic
 Da verificare prima di usarlo in scrittura: nella lista i permessi risultano
 `✓✓✓✗`, uno dei quattro fra `admin`, `api`, `share` e `realtime` è negato.
 
+## Trascrizioni — transcribe
+
+- Progetto: `~/transcribe` (repo `github.com/takohemi/transcribe`), container
+  `transcribe-web-1`, immagine costruita in locale
+- Compose di produzione: `~/transcribe/docker/docker-compose.yml`
+- Dati persistenti in `~/transcribe/data/` (uploads, outputs, modello Whisper,
+  SQLite). Il `.env` tiene la configurazione.
+- URL: `http://trascrizione.gjarper` dietro Caddy, **e anche**
+  `http://<ip-lan>:8000` diretto, perché il container pubblica su `0.0.0.0:8000`
+
+### Aggiornare
+
+```bash
+cd ~/transcribe && ./deploy.sh     # git pull --ff-only + rebuild + restart + health
+```
+
+- ⚠️ **Lanciarlo a coda vuota**: il restart marca `failed` i job in corso.
+  Controllo: `curl -s http://localhost:8000/api/health` → `"queue_size":0`.
+- **Anche una modifica alla sola UI richiede il rebuild**: il `Dockerfile` fa
+  `COPY static/ static/` e il compose di produzione monta **solo** `../data`, non
+  il codice. Niente `restart`, serve `up -d --build` - che è ciò che fa lo script.
+- La working tree sul server riceve solo `git pull`; il `--ff-only` blocca il
+  deploy se ci sono divergenze. Non modificarla a mano.
+- Verifica utile dopo ogni deploy: `/api/health` deve riportare
+  `"timezone":"Europe/Rome"` - è l'unico errore che non si manifesta come errore.
+
+Ultimo deploy: **2026-10-01, commit `204cb25`** (paginazione client-side dei job,
+layout più largo). Build ~2 minuti.
+
+### ⚠️ Esposto senza autenticazione
+
+`/api/health` riporta `"auth": false`: **`APP_TOKEN` non è impostato** nel
+`.env`, e il container ascolta su `0.0.0.0:8000`. Chiunque sia sulla LAN apre
+transcribe e scarica tutte le trascrizioni. Da chiudere su due fronti, che sono
+complementari:
+
+```bash
+# A) token applicativo
+cd ~/transcribe && nano .env        # APP_TOKEN=<stringa lunga casuale>
+./deploy.sh
+
+# B) togliere l'ascolto dalla LAN, come tutti gli altri servizi
+#    docker/docker-compose.yml:  "8000:8000"  ->  "127.0.0.1:8000:8000"
+#    il blocco trascrizione.gjarper nel Caddyfile esiste già
+```
+
+Nota: fatto il punto B, `http://<ip-lan>:8000` smette di funzionare e resta solo
+`http://trascrizione.gjarper` - quindi non è più disponibile come controprova
+"Caddy è giù ma i servizi stanno bene" descritta in § Incidente del 2026-10-01.
+
 ## Aperti
 
 1. **Backup — la lacuna più grave.** Nessuna copia fuori dalla macchina. Da
@@ -463,6 +637,15 @@ Da verificare prima di usarlo in scrittura: nella lista i permessi risultano
      per il restore veloce, più un repo remoto per l'offsite. Con volumi così
      piccoli (~30 GB) l'offsite su storage a oggetti costa pochi centesimi al
      mese ed evita di ruotare a mano un disco di dieci anni.
+   - **Dal 2026-10-01 la destinazione locale esiste**: `/mnt/disco`, 331 GB
+     liberi, SMART impeccabile. Manca solo `restic` - `sudo apt install restic`,
+     `restic init --repo /mnt/disco/restic`, uno snapshot di `/srv` e un timer
+     systemd.
+   - ⚠️ **Ma il disco è dentro la stessa scatola.** Stesso alimentatore, stesso
+     (non) UPS, stesso furto, stesso fulmine. Copre il guasto dell'NVMe e la
+     cancellazione per sbaglio; **non** è l'offsite, che resta da fare. Vale
+     anche al contrario: i 136 GB di backup di altre macchine che erano su quel
+     disco adesso non hanno più una copia altrove.
    - Da verificare che i dump automatici siano effettivamente attivi e con che
      periodicità: Amministrazione → Impostazioni → Backup del database.
 2. **Secondo utente foto (iPhone)**: procedura documentata sopra in
@@ -480,7 +663,12 @@ Da verificare prima di usarlo in scrittura: nella lista i permessi risultano
    Amministrazione → Transcodifica video → accelerazione hardware → VAAPI.
 6. **Pulizia del Caddyfile**: rimuovere i blocchi residui `sync.gjarper` e
    `vault.gjarper`.
-7. **UPS** (~40-50 €) e gli 82 pacchetti di sistema aggiornabili.
+7. **UPS** (~40-50 €) e i pacchetti di sistema arretrati (69 al 2026-10-01).
+8. **Prenotazione DHCP** di `192.168.8.19` nel router: l'IP di gjarper è
+   `dynamic`, e quando cambierà si romperanno i file hosts di tutti i PC.
+9. **Autenticazione di transcribe** - vedi § Trascrizioni, `"auth": false`.
+10. **Syncthing e SilverBullet**: decidere se riaccenderli o rimuovere i
+    rispettivi blocchi dal Caddyfile.
 
 ## Cronologia
 
@@ -495,6 +683,17 @@ Da verificare prima di usarlo in scrittura: nella lista i permessi risultano
   `chgrp -R vault` + `chmod -R g+rwX` + `chmod g+s`. Creazione cartelle
   dall'interfaccia verificata. Aggiornata di conseguenza la decisione #1 in
   `gjarper-hardware.md`.
+
+- **2026-10-01** - sessione di manutenzione. (1) `transcribe` aggiornato a
+  `204cb25` con `deploy.sh`. (2) Montato il **WD500** nel bay 2.5": SMART
+  verificato (impeccabile), NTFS mantenuto coi 136 GB di backup preesistenti,
+  `/mnt/disco` in `/etc/fstab` con `nofail` e `uid/gid` su `paolo:vault`.
+  (3) Risolto il crash-loop di **Caddy** (`ambiguous site definition:
+  http://foto.gjarper`, blocco duplicato) che teneva giù tutti i nomi
+  `.gjarper`: era latente dal 28/09 e il riavvio l'ha solo rivelato.
+  (4) Scoperto che il compose di Caddy sta in `~/infra/caddy/`, non in `~/infra`.
+  (5) Scoperto che l'IP LAN è DHCP, non statico, e che transcribe gira senza
+  `APP_TOKEN`.
 
 - **2026-09-30** (seguito) — accesso dal telefono: verificato che la `2.0.9-beta`
   **non ha WebDAV** (nessuna rotta nello swagger, nessuna chiave `disableWebDAV`
